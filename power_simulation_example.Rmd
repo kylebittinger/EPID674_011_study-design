@@ -1,0 +1,148 @@
+---
+title: "Power simulation"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(broom)
+library(pwr)
+```
+
+## Example 1: continuous outcome (taxon abundance, alpha diversity)
+
+Let's assume that samples are normally distributed, 10 per group.
+
+I am going to write this *how I would actually do it*, and not water it down
+for the course. This is advanced stuff, but hopefully can serve as a template.
+
+We start with two functions: one to generate a simulated data set, and one to
+carry out the statistical test. The data-generating function can be used to
+create data for plots or inspection. Try out the `simulate_data()` function to
+see what the fake data looks like. The statistical-testing function should
+look similar to what you would eventually use in the analysis. Try both
+functions in combination to see what the test results look like.
+
+The `crossing()` function is new. It returns a data frame with each combination
+of its arguments. Here, we get subject 1 in group A, subject 1 in group B,
+subject 2 in group A, etc.
+
+```{r}
+simulate_data <- function (d) {
+  group_effects <- tibble(group = c("A", "B"), effect = c(0, d))
+  crossing(subject = seq(1, 10), group=c("A", "B")) %>%
+    left_join(group_effects, by="group") %>%
+    mutate(noise = rnorm(n())) %>%
+    mutate(y = effect + noise)
+}
+run_test <- function (df) {
+  tidy(t.test(y ~ group, data=df))
+}
+```
+
+We use the `crossing()` function again to create a data frame with all
+combinations of the effect size `d` and the number of the simulation, 1 to 500.
+We will use this data frame for the simulation.
+
+```{r}
+sim_df <- crossing(
+  d = seq(1, 2, by=0.2),
+  nsim = seq(1, 500))
+```
+
+Now, we actually carry out the simulation.
+
+```{r}
+set.seed(42)
+sim_results <- sim_df %>%
+  group_by_all() %>%
+  summarize(run_test(simulate_data(d))) %>%
+  ungroup()
+```
+
+We get the power by finding the fraction of significant results at each value
+of the effect size.
+
+```{r}
+sim_summary <- sim_results %>%
+  mutate(significant_result = p.value < 0.05) %>%
+  group_by(d) %>%
+  summarize(power = sum(significant_result) / n()) %>%
+  ungroup() 
+```
+
+```{r}
+sim_summary %>%
+  ggplot() +
+  geom_point(aes(x=d, y=power)) +
+  geom_hline(yintercept=0.8, linetype="dashed", color="#666666") +
+  theme_bw()
+ggsave("power_simulation_continuous.png", width=4, height=2.4, dpi=300)
+```
+
+How does this compare to the exact answer?
+
+```{r}
+pwr.t.test(n = 10, power = 0.8)
+```
+
+
+## Example 1: binary outcome (taxon presence, disease status)
+
+Consider an example with two groups, 25 subjects in each group. We expect that
+30% of subjects in group 1 will be positive for presence of the taxon or
+positive in disease status.
+
+We will use the binomial distribution to simulate the number of positive and
+negative results as we vary the proportion in group 2. We will use Fisher's
+exact test to evaluate the data.
+
+The only practical difference from the previous example is that we vary `p2`
+instead of the effect size. From a coding standpoint, everything else is the
+same.
+
+```{r}
+simulate_binary <- function (p2) {
+  p1 <- 0.3
+  n1 <- 25
+  n2 <- 25
+  x1 <- rbinom(1, n1, p1)
+  x2 <- rbinom(1, n2, p2)
+  matrix(c(x1, n1 - x1, x2, n2 - x2), ncol=2)
+}
+test_binary <- function (m) {
+  tidy(fisher.test(m))
+}
+```
+
+```{r}
+sim_df_binary <- crossing(
+  p2 = seq(0.50, 0.95, by=0.05), 
+  nsim = seq(1, 500))
+```
+
+```{r}
+set.seed(42)
+sim_results_binary <- sim_df_binary %>%
+  group_by_all() %>%
+  summarize(test_binary(simulate_binary(p2))) %>%
+  ungroup()
+```
+
+```{r}
+sim_summary_binary <- sim_results_binary %>%
+  mutate(significant_result = p.value < 0.05) %>%
+  group_by(p2) %>%
+  summarize(power = sum(significant_result) / n()) %>%
+  ungroup() 
+```
+
+```{r}
+sim_summary_binary %>%
+  ggplot() +
+  geom_point(aes(x=p2, y=power)) +
+  geom_hline(yintercept=0.8, linetype="dashed", color="#666666") +
+  theme_bw()
+ggsave("power_simulation_binary.png", width=4, height=2.4, dpi=300)
+```
+
